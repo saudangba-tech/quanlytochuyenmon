@@ -1,0 +1,91 @@
+@import 'tailwindcss';
+
+@theme {
+  --font-sans: 'Segoe UI', 'Inter', system-ui, -apple-system, Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+html,
+body,
+#root {
+  min-height: 100%;
+}
+body {
+  @apply bg-slate-50 text-slate-800 antialiased;
+}
+
+/* Tailwind v4: lớp tự định nghĩa dùng @utility để @apply / kết hợp được */
+@utility input {
+  @apply w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm outline-none transition focus:border-blue-500 focus:ring-2 focus:ring-blue-100 disabled:bg-slate-100;
+}
+@utility label {
+  @apply mb-1 block text-sm font-medium text-slate-700;
+}
+@utility btn {
+  @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50;
+}
+@utility btn-primary {
+  @apply btn bg-blue-700 text-white hover:bg-blue-800;
+}
+@utility btn-secondary {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:bg-slate-50;
+}
+@utility btn-danger {
+  @apply btn bg-red-600 text-white hover:bg-red-700;
+}
+@utility btn-success {
+  @apply btn bg-emerald-600 text-white hover:bg-emerald-700;
+}
+@utility card {
+  @apply rounded-xl border border-slate-200 bg-white shadow-sm;
+}
+@utility table-base {
+  @apply w-full border-collapse text-sm;
+}
+.table-base th {
+  @apply border-b border-slate-200 bg-slate-50 px-3 py-2 text-left font-semibold whitespace-nowrap text-slate-600;
+}
+.table-base td {
+  @apply border-b border-slate-100 px-3 py-2 align-top;
+}
+
+/* Nội dung câu hỏi có công thức */
+.math-content {
+  @apply leading-relaxed break-words;
+}
+.math-content .katex-display {
+  margin: 0.4em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.math-content img {
+  max-width: 100%;
+}
+
+/* Trang in đề / PDF */
+@media print {
+  @page {
+    size: A4;
+    margin: 15mm 15mm 15mm 20mm;
+  }
+  body {
+    background: #fff !important;
+  }
+  .no-print {
+    display: none !important;
+  }
+  .print-area {
+    font-family: 'Times New Roman', Times, serif;
+    font-size: 12pt;
+    color: #000;
+    box-shadow: none !important;
+    border: none !important;
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  .avoid-break {
+    break-inside: avoid;
+  }
+}
+.print-area {
+  font-family: 'Times New Roman', Times, serif;
+}

@@ -1,0 +1,101 @@
+rules_version = '2';
+// ==========================================================================
+// LUẬT BẢO MẬT FIRESTORE – PHẦN MỀM TỔ CHUYÊN MÔN
+// Dán toàn bộ nội dung này vào Firebase Console > Firestore Database > Rules > Publish.
+// Bộ luật này KHÔNG có ngày hết hạn (khác chế độ "test mode" chỉ chạy 30 ngày).
+//
+// Vai trò lưu ở users/{uid}.role:
+//   pending  – mới đăng ký, chờ Tổ trưởng duyệt (không xem được dữ liệu)
+//   teacher  – Giáo viên: đóng góp câu hỏi, khai báo hồ sơ
+//   deputy   – Tổ phó: thêm quyền duyệt, trộn đề, ghi nhận thi đua
+//   leader   – Tổ trưởng: toàn quyền (phân quyền, cài đặt, sao lưu)
+//   disabled – Đã khóa
+// ==========================================================================
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function userPath(uid) { return /databases/$(database)/documents/users/$(uid); }
+    function settingsPath() { return /databases/$(database)/documents/settings/app; }
+    function myRole() {
+      return exists(userPath(request.auth.uid)) ? get(userPath(request.auth.uid)).data.role : 'none';
+    }
+    function isMember()  { return signedIn() && myRole() in ['teacher', 'deputy', 'leader']; }
+    function isManager() { return signedIn() && myRole() in ['deputy', 'leader']; }
+    function isLeader()  { return signedIn() && myRole() == 'leader'; }
+    function incoming() { return request.resource.data; }
+    function changedOnly(keys) { return incoming().diff(resource.data).affectedKeys().hasOnly(keys); }
+
+    // ---------------- CÀI ĐẶT CHUNG ----------------
+    match /settings/{docId} {
+      allow read: if signedIn();
+      // Lần đầu tiên (chưa có settings/app): người đăng nhập đầu tiên tự tạo cài đặt
+      // và cùng lúc tạo hồ sơ Tổ trưởng của chính mình (trong 1 batch).
+      allow create: if isLeader()
+        || (docId == 'app' && signedIn() && !exists(settingsPath())
+            && getAfter(userPath(request.auth.uid)).data.role == 'leader');
+      allow update, delete: if isLeader();
+    }
+
+    // ---------------- THÀNH VIÊN ----------------
+    match /users/{userId} {
+      allow read: if signedIn() && (request.auth.uid == userId || isMember());
+      // Chỉ tạo hồ sơ của chính mình, đúng email đăng nhập, vai trò "pending".
+      // Ngoại lệ duy nhất: người khởi tạo hệ thống (chưa có settings/app) được làm Tổ trưởng.
+      allow create: if signedIn() && request.auth.uid == userId
+        && incoming().email == request.auth.token.email
+        && (incoming().role == 'pending'
+            || (incoming().role == 'leader' && !exists(settingsPath()) && existsAfter(settingsPath())));
+      // Tự sửa: chỉ tên hiển thị / ảnh / số điện thoại – KHÔNG tự đổi vai trò
+      allow update: if isLeader()
+        || (signedIn() && request.auth.uid == userId && changedOnly(['name', 'photoURL', 'phone']));
+      allow delete: if isLeader();
+    }
+
+    // ---------------- NGÂN HÀNG CÂU HỎI ----------------
+    match /questions/{qid} {
+      allow read: if isMember();
+      // Giáo viên gửi câu hỏi của chính mình, luôn ở trạng thái chờ duyệt
+      allow create: if isMember()
+        && incoming().authorId == request.auth.uid
+        && incoming().status == 'pending'
+        && incoming().content is string && incoming().content.size() < 20000;
+      // Tác giả sửa câu chưa được duyệt (gửi duyệt lại); TT/TP sửa và duyệt mọi câu
+      allow update: if isManager()
+        || (isMember()
+            && resource.data.authorId == request.auth.uid
+            && resource.data.status != 'approved'
+            && incoming().authorId == request.auth.uid
+            && incoming().status == 'pending');
+      allow delete: if isManager()
+        || (isMember() && resource.data.authorId == request.auth.uid && resource.data.status != 'approved');
+    }
+
+    // ---------------- HỒ SƠ CHUYÊN MÔN / ĐIỂM THI ĐUA ----------------
+    match /records/{rid} {
+      allow read: if isMember();
+      // Giáo viên khai báo → chờ duyệt; TT/TP ghi nhận trực tiếp (đã duyệt)
+      allow create: if isManager()
+        || (isMember() && incoming().createdBy == request.auth.uid && incoming().status == 'pending');
+      allow update: if isManager()
+        || (isMember()
+            && resource.data.createdBy == request.auth.uid
+            && resource.data.status != 'approved'
+            && incoming().createdBy == request.auth.uid
+            && incoming().status == 'pending');
+      allow delete: if isManager()
+        || (isMember() && resource.data.createdBy == request.auth.uid && resource.data.status != 'approved');
+    }
+
+    // ---------------- ĐỀ THI ĐÃ TRỘN (chỉ TT/TP) ----------------
+    match /exams/{eid} {
+      allow read, update, delete: if isManager();
+      allow create: if isManager() && incoming().createdBy == request.auth.uid;
+    }
+
+    // Mọi đường dẫn khác: từ chối
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
