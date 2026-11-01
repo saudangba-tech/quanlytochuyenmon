@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { deleteDoc } from 'firebase/firestore';
-import { FilePlus2, FileText, FileDown, Printer, Trash2, KeyRound, Archive } from 'lucide-react';
+import { collection, deleteDoc, getDocs, writeBatch } from 'firebase/firestore';
+import { FilePlus2, FileText, FileDown, Printer, Trash2, KeyRound, Archive, Grid3x3 } from 'lucide-react';
+import { db } from '../firebase.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { fetchWhere, fetchByIds, ref } from '../lib/db.js';
+import { fetchWhere, loadExamQuestions, ref } from '../lib/db.js';
 import { formatTimestamp, downloadBlob, safeFileName } from '../lib/utils.js';
 import { PageHeader, PageLoader, Empty, Badge, Spinner, useAsync } from '../components/ui.jsx';
 
@@ -29,7 +30,7 @@ export default function Exams() {
   async function withQuestions(exam, fn, msg) {
     setBusyId(exam.id);
     await run(async () => {
-      const qmap = await fetchByIds('questions', exam.questionIds);
+      const qmap = await loadExamQuestions(exam);
       const missing = exam.questionIds.filter((id) => !qmap[id]).length;
       if (missing) throw new Error(`${missing} câu hỏi trong đề đã bị xóa khỏi ngân hàng, không thể xuất đầy đủ.`);
       await fn(qmap);
@@ -38,6 +39,16 @@ export default function Exams() {
   }
 
   const base = (exam) => safeFileName(`${exam.title}_lop${exam.grade}`);
+
+  const exportMatrix = (exam) =>
+    withQuestions(
+      exam,
+      async (qmap) => {
+        const { buildMatrixDocx } = await import('../lib/examExport.js');
+        downloadBlob(await buildMatrixDocx(exam, qmap, settings), `${base(exam)}_MA_TRAN_DAC_TA.docx`);
+      },
+      'Đã tải ma trận và bảng đặc tả.'
+    );
 
   const exportOne = (exam) =>
     withQuestions(
@@ -54,10 +65,11 @@ export default function Exams() {
     withQuestions(
       exam,
       async (qmap) => {
-        const [{ buildExamDocx, buildAnswerDocx }, { default: JSZip }] = await Promise.all([import('../lib/examExport.js'), import('jszip')]);
+        const [{ buildExamDocx, buildAnswerDocx, buildMatrixDocx }, { default: JSZip }] = await Promise.all([import('../lib/examExport.js'), import('jszip')]);
         const zip = new JSZip();
         for (const v of exam.versions) zip.file(`${base(exam)}_ma${v.code}.docx`, await buildExamDocx(exam, v, qmap, settings));
         zip.file(`${base(exam)}_DAP_AN.docx`, await buildAnswerDocx(exam, exam.versions, qmap, settings, { solutionVersion: exam.versions[0].code }));
+        zip.file(`${base(exam)}_MA_TRAN_DAC_TA.docx`, await buildMatrixDocx(exam, qmap, settings));
         downloadBlob(await zip.generateAsync({ type: 'blob' }), `${base(exam)}_tat_ca_ma_de.zip`);
       },
       'Đã tải trọn bộ đề và đáp án.'
@@ -85,7 +97,7 @@ export default function Exams() {
           for (const it of part.items) {
             let ans = '';
             if (part.type === 'mcq') ans = displayedOptions(it.q, it.perm).correct;
-            if (part.type === 'tf') ans = tfAnswerText(it.q).join('');
+            if (part.type === 'tf') ans = tfAnswerText(it.q, it.perm).join('');
             if (part.type === 'short') ans = it.q.answer;
             rows.push({ code: v.code, part: part.roman, no: it.no, ans });
           }
@@ -107,6 +119,12 @@ export default function Exams() {
   async function remove(exam) {
     if (!confirm(`Xóa đề "${exam.title}"? Câu hỏi trong ngân hàng không bị ảnh hưởng.`)) return;
     await run(async () => {
+      if (exam.snapshot) {
+        const items = await getDocs(collection(db, 'exams', exam.id, 'items'));
+        const batch = writeBatch(db);
+        items.docs.forEach((d) => batch.delete(d.ref));
+        await batch.commit();
+      }
       await deleteDoc(ref('exams', exam.id));
       setList((l) => l.filter((x) => x.id !== exam.id));
     }, 'Đã xóa đề.');
@@ -174,6 +192,9 @@ export default function Exams() {
                   </button>
                   <button className="btn-secondary" disabled={busy} onClick={() => exportKeyExcel(e)}>
                     Đáp án (Excel)
+                  </button>
+                  <button className="btn-secondary" disabled={busy} onClick={() => exportMatrix(e)}>
+                    <Grid3x3 size={16} className="text-violet-600" /> Ma trận + đặc tả (Word)
                   </button>
                   <button className="btn-primary" disabled={busy} onClick={() => exportAll(e)}>
                     <Archive size={16} /> Tải trọn bộ (.zip)

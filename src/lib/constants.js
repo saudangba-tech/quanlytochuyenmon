@@ -94,6 +94,8 @@ export const DEFAULT_THRESHOLDS = {
   year: { tot: 80, kha: 50, dat: 25 },
 };
 
+export const SOURCE_TYPES = ['Đề thi thử', 'Đề kiểm tra', 'Đề thi HSG', 'SGK – SBT', 'Tài liệu tham khảo', 'Tự soạn', 'Khác'];
+
 export const LESSON_RATINGS = ['Tốt', 'Khá', 'Đạt', 'Chưa đạt'];
 export const ACHIEVEMENT_LEVELS = ['Trường', 'Cụm', 'Tỉnh/Thành phố', 'Quốc gia'];
 
@@ -105,6 +107,7 @@ export const DEFAULT_SETTINGS = {
   location: '',
   grades: [10, 11, 12],
   topics: DEFAULT_TOPICS,
+  topicCodes: {}, // mã chuyên đề trong mã ID → tên chuyên đề, ví dụ { '2D1': 'Ứng dụng đạo hàm…' }
   questionPoints: DEFAULT_QUESTION_POINTS,
   criteria: DEFAULT_CRITERIA,
   thresholds: DEFAULT_THRESHOLDS,

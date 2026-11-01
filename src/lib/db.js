@@ -11,6 +11,7 @@ import {
   writeBatch,
   increment,
   deleteDoc,
+  addDoc,
 } from 'firebase/firestore';
 import { db } from '../firebase.js';
 import { periodFields, todayISO } from './utils.js';
@@ -114,6 +115,64 @@ export async function deleteQuestion(q) {
     await batch.commit();
   } else {
     await deleteDoc(ref('questions', q.id));
+  }
+}
+
+// ----- Nguồn đề -----
+export async function createSource(data, me) {
+  const r = await addDoc(col('sources'), {
+    name: data.name.trim(),
+    type: data.type || 'Khác',
+    year: data.year || '',
+    note: data.note || '',
+    createdBy: me.uid,
+    createdByName: me.name,
+    createdAt: serverTimestamp(),
+  });
+  invalidate('sources');
+  return { id: r.id, name: data.name.trim() };
+}
+
+// Tìm nguồn theo tên trong danh sách đã có, chưa có thì tạo mới
+export async function ensureSource(name, sources, me) {
+  const n = (name || '').trim();
+  if (!n) return { id: '', name: '' };
+  const found = sources.find((s) => s.name.toLowerCase() === n.toLowerCase());
+  return found ? { id: found.id, name: found.name } : createSource({ name: n, type: 'Khác' }, me);
+}
+
+// ----- Phát hiện câu trùng theo dấu vân tay nội dung (truy vấn "in" tối đa 30 giá trị/lần) -----
+export async function findDuplicates(hashes) {
+  const uniq = [...new Set(hashes.filter(Boolean))];
+  const found = {};
+  for (let i = 0; i < uniq.length; i += 30) {
+    const snap = await getDocs(query(col('questions'), where('hash', 'in', uniq.slice(i, i + 30))));
+    snap.docs.forEach((d) => {
+      const x = d.data();
+      (found[x.hash] ||= []).push({ id: d.id, grade: x.grade, status: x.status, authorName: x.authorName });
+    });
+  }
+  return found;
+}
+
+// Nội dung câu hỏi của một đề: ưu tiên bản chụp lưu kèm đề (exams/{id}/items), thiếu thì lấy từ ngân hàng
+export async function loadExamQuestions(exam) {
+  const map = {};
+  if (exam.snapshot) {
+    const snap = await getDocs(collection(db, 'exams', exam.id, 'items'));
+    snap.docs.forEach((d) => (map[d.id] = { id: d.id, ...d.data() }));
+  }
+  const missing = exam.questionIds.filter((id) => !map[id]);
+  if (missing.length) Object.assign(map, await fetchByIds('questions', missing));
+  return map;
+}
+
+// Ghi nhận số lần câu hỏi được dùng trong đề
+export async function markQuestionsUsed(ids, examId) {
+  for (let i = 0; i < ids.length; i += 400) {
+    const batch = writeBatch(db);
+    ids.slice(i, i + 400).forEach((id) => batch.update(ref('questions', id), { usedCount: increment(1), lastUsedAt: serverTimestamp(), lastExamId: examId }));
+    await batch.commit();
   }
 }
 

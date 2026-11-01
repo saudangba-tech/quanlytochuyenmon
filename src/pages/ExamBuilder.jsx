@@ -1,29 +1,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { addDoc, serverTimestamp } from 'firebase/firestore';
-import { Shuffle, Save, RefreshCw, X, Wand2 } from 'lucide-react';
+import { addDoc, deleteDoc, doc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { Shuffle, Save, RefreshCw, X, Wand2, BookmarkPlus, Trash2 } from 'lucide-react';
+import { db } from '../firebase.js';
 import { useAuth } from '../context/AuthContext.jsx';
-import { col, fetchWhere, cached } from '../lib/db.js';
+import { col, ref, fetchWhere, cached, invalidate, markQuestionsUsed } from '../lib/db.js';
 import { LEVELS, TYPES } from '../lib/constants.js';
 import { PART_ORDER } from '../lib/examExport.js';
+import { makeVersions, distribute } from '../lib/examMix.js';
 import { currentSchoolYear, shuffle } from '../lib/utils.js';
 import QuestionView, { QuestionMeta } from '../components/QuestionView.jsx';
 import { PageHeader, PageLoader, Field, Spinner, useAsync, useToast } from '../components/ui.jsx';
 
 const cellKey = (topic, type, level) => `${topic}||${type}||${level}`;
-
-// Sinh các mã đề: trộn thứ tự câu trong từng phần và trộn phương án A–D
-export function makeVersions(questions, { count, startCode, shuffleQuestions, shuffleOptions }) {
-  const byType = PART_ORDER.map((t) => questions.filter((q) => q.type === t));
-  return Array.from({ length: count }, (_, i) => {
-    const items = [];
-    byType.forEach((list) => {
-      const ordered = shuffleQuestions ? shuffle(list) : list;
-      ordered.forEach((q) => items.push({ id: q.id, perm: q.type === 'mcq' && shuffleOptions ? shuffle([0, 1, 2, 3]) : [0, 1, 2, 3] }));
-    });
-    return { code: String(Number(startCode) + i), items };
-  });
-}
 
 export default function ExamBuilder() {
   const { settings, me } = useAuth();
@@ -37,25 +26,89 @@ export default function ExamBuilder() {
     startCode: 101,
     shuffleQuestions: true,
     shuffleOptions: true,
+    shuffleStatements: false,
+    randomCodes: false,
+    usage: 'prefer', // any | prefer (ưu tiên câu ít dùng) | exclude (chỉ lấy câu chưa dùng)
     official: true,
     points: { mcq: 0.25, short: 0.5, essay: 1 },
   });
-  const [pool, setPool] = useState([]);
+  const [allPool, setAllPool] = useState([]);
   const [loading, setLoading] = useState(true);
   const [type, setType] = useState('mcq');
   const [matrix, setMatrix] = useState({});
   const [picked, setPicked] = useState([]);
+  const [templates, setTemplates] = useState([]);
+  const [targets, setTargets] = useState({ NB: '', TH: '', VD: '', VDC: '' });
   const [busy, run] = useAsync();
+  const pool = useMemo(() => (info.usage === 'exclude' ? allPool.filter((q) => !q.usedCount) : allPool), [allPool, info.usage]);
 
   useEffect(() => {
     setLoading(true);
     const g = Number(info.grade);
-    run(() => cached(`q:grade:${g}:approved`, () => fetchWhere('questions', [['grade', '==', g], ['status', '==', 'approved']])).then(setPool)).finally(() =>
+    run(() => cached(`q:grade:${g}:approved`, () => fetchWhere('questions', [['grade', '==', g], ['status', '==', 'approved']])).then(setAllPool)).finally(() =>
       setLoading(false)
     );
     setMatrix({});
     setPicked([]);
   }, [info.grade]);
+
+  useEffect(() => {
+    fetchWhere('matrices').then((l) => setTemplates(l.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'vi')))).catch(() => {});
+  }, []);
+
+  // Câu ứng viên cho một ô ma trận, theo chính sách dùng lại câu hỏi
+  function candidates(topic, ty, lv, exclude = new Set()) {
+    const list = shuffle(pool.filter((q) => q.topic === topic && q.type === ty && q.level === lv && !exclude.has(q.id)));
+    if (info.usage === 'prefer') list.sort((a, b) => (a.usedCount || 0) - (b.usedCount || 0));
+    return list;
+  }
+
+  async function saveTemplate() {
+    const name = prompt('Tên ma trận mẫu (ví dụ: Giữa kỳ I – Lớp 12 – cấu trúc 2025):', info.title);
+    if (!name?.trim()) return;
+    await run(async () => {
+      const data = { name: name.trim(), grade: Number(info.grade), matrix, points: info.points, duration: Number(info.duration), createdBy: me.uid, createdByName: me.name, createdAt: serverTimestamp() };
+      const r = await addDoc(col('matrices'), data);
+      setTemplates((l) => [...l, { id: r.id, ...data }]);
+    }, 'Đã lưu ma trận mẫu.');
+  }
+
+  function loadTemplate(id) {
+    const t = templates.find((x) => x.id === id);
+    if (!t) return;
+    const m = {};
+    const missing = [];
+    for (const [k, n] of Object.entries(t.matrix || {})) {
+      if (!n) continue;
+      const av = available[k] || 0;
+      m[k] = Math.min(n, av);
+      if (av < n) missing.push(`${k.split('||')[0]} (${k.split('||')[2]}): cần ${n}, có ${av}`);
+    }
+    setMatrix(m);
+    setInfo((i) => ({ ...i, points: t.points || i.points, duration: t.duration || i.duration }));
+    setPicked([]);
+    if (missing.length) toast(`Ngân hàng chưa đủ câu cho: ${missing.slice(0, 3).join('; ')}${missing.length > 3 ? '…' : ''}`, 'info');
+  }
+
+  async function deleteTemplate(id) {
+    if (!confirm('Xóa ma trận mẫu này?')) return;
+    await run(async () => {
+      await deleteDoc(ref('matrices', id));
+      setTemplates((l) => l.filter((x) => x.id !== id));
+    });
+  }
+
+  function autoDistribute() {
+    const res = distribute(targets, topics, (t, lv) => available[cellKey(t, type, lv)] || 0);
+    const next = Object.fromEntries(Object.entries(matrix).filter(([k]) => k.split('||')[1] !== type));
+    for (const [k, n] of Object.entries(res)) {
+      if (k === '__short') continue;
+      const [t, lv] = k.split('|');
+      next[cellKey(t, type, lv)] = n;
+    }
+    setMatrix(next);
+    if (res.__short) toast(`Ngân hàng còn thiếu ${res.__short} câu so với yêu cầu, đã lấy tối đa có thể.`, 'info');
+  }
 
   const topics = useMemo(() => {
     const fromPool = [...new Set(pool.map((q) => q.topic))];
@@ -89,9 +142,9 @@ export default function ExamBuilder() {
     for (const [k, n] of Object.entries(matrix)) {
       if (!n) continue;
       const [topic, ty, lv] = k.split('||');
-      const candidates = pool.filter((q) => q.topic === topic && q.type === ty && q.level === lv);
-      if (candidates.length < n) return toast(`Không đủ câu: ${topic} – ${ty} – ${lv}`, 'error');
-      chosen.push(...shuffle(candidates).slice(0, n));
+      const list = candidates(topic, ty, lv);
+      if (list.length < n) return toast(`Không đủ câu: ${topic} – ${ty} – ${lv}`, 'error');
+      chosen.push(...list.slice(0, n));
     }
     if (!chosen.length) return toast('Hãy nhập số câu vào ma trận.', 'error');
     // Sắp theo phần, trong mỗi phần theo mức độ tăng dần
@@ -101,8 +154,7 @@ export default function ExamBuilder() {
   }
 
   function swap(q) {
-    const used = new Set(picked.map((x) => x.id));
-    const alt = shuffle(pool.filter((x) => !used.has(x.id) && x.topic === q.topic && x.type === q.type && x.level === q.level))[0];
+    const alt = candidates(q.topic, q.type, q.level, new Set(picked.map((x) => x.id)))[0];
     if (!alt) return toast('Không còn câu khác cùng chuyên đề, dạng và mức độ.', 'info');
     setPicked((l) => l.map((x) => (x.id === q.id ? alt : x)));
   }
@@ -110,7 +162,14 @@ export default function ExamBuilder() {
   async function save() {
     if (!picked.length) return toast('Chưa có câu hỏi nào trong đề.', 'error');
     await run(async () => {
-      const versions = makeVersions(picked, { count: Number(info.versions) || 1, startCode: info.startCode, shuffleQuestions: info.shuffleQuestions, shuffleOptions: info.shuffleOptions });
+      const versions = makeVersions(picked, {
+        count: Math.min(24, Math.max(1, Number(info.versions) || 1)),
+        startCode: info.startCode,
+        shuffleQuestions: info.shuffleQuestions,
+        shuffleOptions: info.shuffleOptions,
+        shuffleStatements: info.shuffleStatements,
+        randomCodes: info.randomCodes,
+      });
       const r = await addDoc(col('exams'), {
         title: info.title.trim(),
         grade: Number(info.grade),
@@ -121,10 +180,31 @@ export default function ExamBuilder() {
         matrix,
         questionIds: picked.map((q) => q.id),
         versions,
+        snapshot: true,
         createdBy: me.uid,
         createdByName: me.name,
         createdAt: serverTimestamp(),
       });
+      // Lưu bản chụp nội dung các câu vào đề: sau này ai sửa/xóa câu trong ngân hàng thì đề đã ra vẫn giữ nguyên
+      let batch = writeBatch(db);
+      let ops = 0;
+      let bytes = 0;
+      for (const q of picked) {
+        const { id, ...data } = q;
+        const size = JSON.stringify(data).length;
+        if (ops && (ops >= 400 || bytes + size > 3_500_000)) {
+          await batch.commit();
+          batch = writeBatch(db);
+          ops = 0;
+          bytes = 0;
+        }
+        batch.set(doc(db, 'exams', r.id, 'items', id), data);
+        ops++;
+        bytes += size;
+      }
+      if (ops) await batch.commit();
+      await markQuestionsUsed(picked.map((q) => q.id), r.id);
+      invalidate('q:');
       nav(`/de-thi?moi=${r.id}`);
     }, 'Đã lưu đề và sinh các mã đề.');
   }
@@ -176,9 +256,59 @@ export default function ExamBuilder() {
             <input type="checkbox" checked={info.shuffleOptions} onChange={set('shuffleOptions')} /> Trộn phương án A, B, C, D
           </label>
           <label className="flex items-center gap-2">
-            <input type="checkbox" checked={info.official} onChange={set('official')} /> Ghi “ĐỀ CHÍNH THỨC”
+            <input type="checkbox" checked={info.shuffleStatements} onChange={set('shuffleStatements')} /> Trộn thứ tự ý a, b, c, d (câu Đúng/Sai)
           </label>
         </div>
+        <div className="flex flex-col justify-end gap-1 text-sm sm:col-span-2 lg:col-span-3">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={info.randomCodes} onChange={set('randomCodes')} /> Mã đề ngẫu nhiên (vd. 132, 209, 357…)
+          </label>
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={info.official} onChange={set('official')} /> Ghi “ĐỀ CHÍNH THỨC”
+          </label>
+          <label className="flex items-center gap-2">
+            Câu đã dùng ở đề trước:
+            <select className="rounded border border-slate-300 px-1.5 py-0.5" value={info.usage} onChange={set('usage')}>
+              <option value="prefer">Ưu tiên câu ít dùng</option>
+              <option value="exclude">Chỉ lấy câu chưa dùng</option>
+              <option value="any">Lấy ngẫu nhiên</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div className="card mb-4 flex flex-wrap items-center gap-2 p-3">
+        <span className="text-sm font-semibold text-slate-700">Ma trận mẫu:</span>
+        <select className="input w-auto min-w-64" value="" onChange={(e) => loadTemplate(e.target.value)} disabled={loading}>
+          <option value="">— Chọn ma trận đã lưu để áp dụng —</option>
+          {templates
+            .filter((t) => t.grade === Number(info.grade))
+            .map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+        </select>
+        <button className="btn-secondary" onClick={saveTemplate} disabled={busy || !Object.values(matrix).some(Boolean)}>
+          <BookmarkPlus size={16} /> Lưu ma trận hiện tại làm mẫu
+        </button>
+        {templates.some((t) => t.grade === Number(info.grade)) && (
+          <details className="text-xs text-slate-500">
+            <summary className="cursor-pointer">Quản lý mẫu</summary>
+            <ul className="mt-1 space-y-1">
+              {templates
+                .filter((t) => t.grade === Number(info.grade))
+                .map((t) => (
+                  <li key={t.id} className="flex items-center gap-2">
+                    {t.name} <span className="text-slate-400">({t.createdByName})</span>
+                    <button className="text-red-500" onClick={() => deleteTemplate(t.id)} title="Xóa mẫu">
+                      <Trash2 size={13} />
+                    </button>
+                  </li>
+                ))}
+            </ul>
+          </details>
+        )}
       </div>
 
       {loading ? (
@@ -197,6 +327,25 @@ export default function ExamBuilder() {
             <span className="text-sm text-slate-600">
               Tổng điểm dự kiến: <b>{String(Math.round(scoreTotal * 100) / 100).replace('.', ',')}</b>
             </span>
+          </div>
+          <div className="mb-3 flex flex-wrap items-end gap-2 rounded-lg bg-slate-50 p-3 text-sm">
+            <span className="font-medium text-slate-700">Phân bổ tự động ({TYPES.find((t) => t.id === type)?.short}):</span>
+            {LEVELS.map((l) => (
+              <label key={l.id} className="flex items-center gap-1">
+                {l.id}
+                <input
+                  type="number"
+                  min="0"
+                  className="input w-16 py-1 text-center"
+                  value={targets[l.id]}
+                  onChange={(e) => setTargets({ ...targets, [l.id]: e.target.value })}
+                />
+              </label>
+            ))}
+            <button className="btn-secondary py-1" onClick={autoDistribute}>
+              <Wand2 size={14} /> Chia đều cho các chuyên đề
+            </button>
+            <span className="text-xs text-slate-500">Nhập tổng số câu mỗi mức độ, app chia lần lượt cho các chuyên đề còn câu.</span>
           </div>
           <div className="overflow-x-auto">
             <table className="table-base">
@@ -282,8 +431,10 @@ export default function ExamBuilder() {
                     {list.map((q, i) => (
                       <div key={q.id} className="rounded-lg border border-slate-200 p-3">
                         <div className="mb-1 flex items-start justify-between gap-2">
-                          <div className="flex items-center gap-2">
+                          <div className="flex flex-wrap items-center gap-2">
                             <b>Câu {i + 1}.</b> <QuestionMeta q={q} showStatus={false} />
+                            {q.usedCount > 0 && <span className="rounded bg-violet-50 px-1.5 text-xs text-violet-700">đã dùng {q.usedCount} lần</span>}
+                            {q.sourceName && <span className="text-xs text-slate-400">• {q.sourceName}</span>}
                           </div>
                           <div className="flex gap-1">
                             <button className="rounded p-1 text-slate-500 hover:bg-slate-100" title="Đổi câu khác" onClick={() => swap(q)}>

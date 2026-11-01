@@ -13,6 +13,7 @@ function mergeSettings(s) {
   base.questionPoints = { ...DEFAULT_SETTINGS.questionPoints, ...(s?.questionPoints || {}) };
   if (!Array.isArray(base.criteria) || !base.criteria.length) base.criteria = DEFAULT_SETTINGS.criteria;
   if (!base.topics || !Object.keys(base.topics).length) base.topics = DEFAULT_SETTINGS.topics;
+  base.topicCodes = s?.topicCodes || {};
   return base;
 }
 

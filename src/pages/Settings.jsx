@@ -1,15 +1,21 @@
 import { useState } from 'react';
-import { setDoc, getDocs, writeBatch, doc, Timestamp, serverTimestamp } from 'firebase/firestore';
+import { setDoc, getDocs, writeBatch, doc, collection, Timestamp, serverTimestamp } from 'firebase/firestore';
 import { Save, Plus, Trash2, Download, Upload, RotateCcw } from 'lucide-react';
 import { db } from '../firebase.js';
 import { useAuth } from '../context/AuthContext.jsx';
 import { col, ref, invalidate } from '../lib/db.js';
 import { LEVELS, DEFAULT_TOPICS, DEFAULT_CRITERIA } from '../lib/constants.js';
 import { todayISO, downloadBlob, schoolYearOf } from '../lib/utils.js';
+import { splitTopicLine } from '../lib/questionId.js';
 import { PageHeader, Field, Spinner, useAsync, useToast } from '../components/ui.jsx';
 
-const BACKUP_COLLECTIONS = ['settings', 'users', 'questions', 'records', 'exams'];
+const BACKUP_COLLECTIONS = ['settings', 'users', 'sources', 'questions', 'records', 'matrices', 'exams'];
 const FORMS = { achievement: 'Thành tích / chung', observation: 'Dự giờ / thao giảng', discipline: 'Nề nếp (Tổ trưởng ghi)' };
+
+function topicLines(names, codes = {}) {
+  const byName = Object.fromEntries(Object.entries(codes).map(([c, n]) => [n, c]));
+  return names.map((n) => (byName[n] ? `${byName[n]} | ${n}` : n)).join('\n');
+}
 
 function Section({ title, children, desc }) {
   return (
@@ -41,7 +47,7 @@ export default function SettingsPage() {
   const [s, setS] = useState(() => ({
     ...settings,
     gradesText: settings.grades.join(', '),
-    topicsText: Object.fromEntries(settings.grades.map((g) => [g, (settings.topics[g] || []).join('\n')])),
+    topicsText: Object.fromEntries(settings.grades.map((g) => [g, topicLines(settings.topics[g] || [], settings.topicCodes)])),
   }));
   const [busy, run] = useAsync();
   const set = (k) => (e) => setS({ ...s, [k]: e.target.value });
@@ -52,13 +58,19 @@ export default function SettingsPage() {
 
   async function save() {
     if (!grades.length) return toast('Danh sách khối lớp không hợp lệ.', 'error');
+    // Mỗi dòng: "Tên chuyên đề" hoặc "2D1 | Tên chuyên đề" (mã dùng để khớp mã ID câu hỏi)
+    const topicCodes = {};
     const topics = Object.fromEntries(
       grades.map((g) => [
         g,
         (s.topicsText[g] ?? (DEFAULT_TOPICS[g] || []).join('\n'))
           .split('\n')
-          .map((t) => t.trim())
-          .filter(Boolean),
+          .filter((t) => t.trim())
+          .map((line) => {
+            const { code, name } = splitTopicLine(line);
+            if (code) topicCodes[code] = name;
+            return name;
+          }),
       ])
     );
     const criteria = s.criteria
@@ -73,6 +85,7 @@ export default function SettingsPage() {
       schoolYear: (s.schoolYear || '').trim(),
       grades,
       topics,
+      topicCodes,
       questionPoints: Object.fromEntries(LEVELS.map((l) => [l.id, Number(s.questionPoints[l.id]) || 0])),
       criteria,
       thresholds: Object.fromEntries(
@@ -91,6 +104,12 @@ export default function SettingsPage() {
       for (const name of BACKUP_COLLECTIONS) {
         const snap = await getDocs(col(name));
         out.data[name] = snap.docs.map((d) => ({ id: d.id, ...toJSON(d.data()) }));
+      }
+      // Bản chụp câu hỏi của từng đề
+      out.data.examItems = [];
+      for (const e of out.data.exams.filter((x) => x.snapshot)) {
+        const snap = await getDocs(collection(db, 'exams', e.id, 'items'));
+        snap.docs.forEach((d) => out.data.examItems.push({ examId: e.id, id: d.id, ...toJSON(d.data()) }));
       }
       downloadBlob(new Blob([JSON.stringify(out)], { type: 'application/json' }), `sao-luu-to-chuyen-mon-${todayISO()}.json`);
     }, 'Đã tải file sao lưu.');
@@ -115,6 +134,15 @@ export default function SettingsPage() {
           }
           await batch.commit();
         }
+      }
+      const items = json.data?.examItems || [];
+      for (let i = 0; i < items.length; i += 200) {
+        const batch = writeBatch(db);
+        for (const { examId, id, ...rest } of items.slice(i, i + 200)) {
+          batch.set(doc(db, 'exams', examId, 'items', id), fromJSON(rest));
+          n++;
+        }
+        await batch.commit();
       }
       invalidate('');
       toast(`Đã khôi phục ${n} bản ghi.`);
@@ -159,7 +187,10 @@ export default function SettingsPage() {
         </div>
       </Section>
 
-      <Section title="Chuyên đề theo khối" desc="Mỗi dòng một chuyên đề. Giáo viên chọn chuyên đề khi nhập câu hỏi; ma trận đề dùng danh sách này.">
+      <Section
+        title="Chuyên đề theo khối"
+        desc="Mỗi dòng một chuyên đề. Có thể ghi mã ở đầu dòng theo dạng “2D1 | Ứng dụng đạo hàm…” để câu hỏi có mã ID [2D1-1.2-3] tự xếp vào đúng chuyên đề."
+      >
         <div className="grid gap-3 lg:grid-cols-3">
           {grades.map((g) => (
             <Field key={g} label={`Lớp ${g}`}>

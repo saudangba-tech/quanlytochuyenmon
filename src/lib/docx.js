@@ -78,18 +78,19 @@ export function para(children, opts = {}) {
 export const textPara = (text, style = {}, opts = {}) => para(run(text, style), opts);
 
 export class DocxBuilder {
-  constructor({ font = 'Times New Roman', fontSize = 12, margins = { top: 2, bottom: 2, left: 2, right: 1.5 }, footer = '' } = {}) {
+  constructor({ font = 'Times New Roman', fontSize = 12, margins = { top: 2, bottom: 2, left: 2, right: 1.5 }, footer = '', landscape = false } = {}) {
     this.font = font;
     this.fontSize = fontSize;
     this.margins = margins;
     this.footer = footer;
+    this.landscape = landscape;
     this.body = [];
     this.media = [];
     this.docPrId = 1;
   }
 
   get contentWidth() {
-    return 21 - this.margins.left - this.margins.right;
+    return (this.landscape ? 29.7 : 21) - this.margins.left - this.margins.right;
   }
 
   add(...xml) {
@@ -172,7 +173,7 @@ export class DocxBuilder {
     const ns =
       'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"';
     const mg = this.margins;
-    const sect = `<w:sectPr>${hasFooter ? '<w:footerReference w:type="default" r:id="rIdFooter1"/>' : ''}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="${Math.round(mg.top * CM)}" w:right="${Math.round(
+    const sect = `<w:sectPr>${hasFooter ? '<w:footerReference w:type="default" r:id="rIdFooter1"/>' : ''}${this.landscape ? '<w:pgSz w:w="16838" w:h="11906" w:orient="landscape"/>' : '<w:pgSz w:w="11906" w:h="16838"/>'}<w:pgMar w:top="${Math.round(mg.top * CM)}" w:right="${Math.round(
       mg.right * CM
     )}" w:bottom="${Math.round(mg.bottom * CM)}" w:left="${Math.round(mg.left * CM)}" w:header="567" w:footer="567" w:gutter="0"/></w:sectPr>`;
     const doc = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<w:document ${ns}><w:body>${this.body.join('')}<w:p/>${sect}</w:body></w:document>`;

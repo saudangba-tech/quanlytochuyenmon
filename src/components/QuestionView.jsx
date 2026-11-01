@@ -10,6 +10,7 @@ export function QuestionMeta({ q, showStatus = true }) {
       <Badge className="bg-indigo-50 text-indigo-700">{typeName(q.type)}</Badge>
       {lv && <Badge className={lv.color}>{lv.name}</Badge>}
       {showStatus && q.status && <Badge className={STATUS[q.status]?.color}>{STATUS[q.status]?.name}</Badge>}
+      {q.idCode && <Badge className="bg-amber-50 font-mono text-amber-800">{q.idCode}</Badge>}
       {q.topic && <span className="truncate text-xs text-slate-500">• {q.topic}</span>}
     </div>
   );

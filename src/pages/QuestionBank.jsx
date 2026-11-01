@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { Search, Library, Pencil, Trash2, Eye, EyeOff, RefreshCw, Plus } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { getDocs, query, where, documentId, limit as qLimit } from 'firebase/firestore';
+import { Search, Library, Pencil, Trash2, Eye, EyeOff, RefreshCw, Plus, FolderOpen, X } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
-import { fetchWhere, cached, invalidate, deleteQuestion } from '../lib/db.js';
+import { fetchWhere, cached, invalidate, deleteQuestion, col } from '../lib/db.js';
+import { useSources } from '../lib/hooks.js';
+import { shortId } from '../lib/questionId.js';
 import { LEVELS, TYPES, STATUS } from '../lib/constants.js';
 import QuestionView, { QuestionMeta } from '../components/QuestionView.jsx';
 import { PageHeader, PageLoader, Empty, useAsync } from '../components/ui.jsx';
@@ -13,44 +16,73 @@ const LIMIT = 300;
 
 export default function QuestionBank() {
   const { settings, me, isManager } = useAuth();
-  const [f, setF] = useState({ grade: settings.grades[settings.grades.length - 1], topic: '', level: '', type: '', status: 'approved', mine: false, text: '' });
+  const [params, setParams] = useSearchParams();
+  const { sources } = useSources();
+  const [f, setF] = useState(() => {
+    const src = params.get('nguon') || '';
+    return { grade: src ? '' : settings.grades[settings.grades.length - 1], topic: '', level: '', type: '', status: src ? '' : 'approved', mine: false, source: src, text: '' };
+  });
   const [list, setList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAns, setShowAns] = useState(true);
   const [page, setPage] = useState(1);
   const [busy, run] = useAsync();
+  const wide = f.mine || f.source; // chế độ tải theo người/nguồn: lọc khối, trạng thái trên máy
 
   // Chỉ lọc bằng phép so sánh "==" để không cần tạo chỉ mục (index) phức hợp trên Firestore
   // Khi chưa chọn chuyên đề chỉ tải tối đa LIMIT câu để tiết kiệm hạn mức đọc miễn phí
   async function load(force = false) {
-    const key = f.mine ? `q:mine:${me.uid}` : f.topic ? `q:grade:${f.grade}:${f.status}:${f.topic}` : `q:grade:${f.grade}:${f.status}:*`;
+    const key = f.mine
+      ? `q:mine:${me.uid}`
+      : f.source
+        ? `q:src:${f.source}`
+        : f.topic
+          ? `q:grade:${f.grade}:${f.status}:${f.topic}`
+          : `q:grade:${f.grade}:${f.status}:*`;
     if (force) invalidate(key);
     setLoading(true);
     await run(async () => {
       const filters = f.mine
         ? [['authorId', '==', me.uid]]
-        : [['grade', '==', Number(f.grade)], ['status', '==', f.status], ['topic', '==', f.topic]];
-      const data = await cached(key, () => fetchWhere('questions', filters, f.mine || f.topic ? undefined : LIMIT));
+        : f.source
+          ? [['sourceId', '==', f.source]]
+          : [['grade', '==', Number(f.grade)], ['status', '==', f.status || 'approved'], ['topic', '==', f.topic]];
+      const data = await cached(key, () => fetchWhere('questions', filters, wide || f.topic ? undefined : LIMIT));
       data.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
       setList(data);
     });
     setLoading(false);
   }
+  const loadKey = f.byId ? 'byId' : wide ? `w:${f.mine}:${f.source}` : `n:${f.grade}:${f.status}:${f.topic}`;
   useEffect(() => {
+    if (f.byId) return;
     load();
     setPage(1);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [f.grade, f.status, f.mine, f.mine ? '' : f.topic]);
+  }, [loadKey]);
+
+  // Tìm theo mã câu (#xxxxxxxx) trên toàn bộ ngân hàng
+  async function findById() {
+    const prefix = f.text.trim().replace(/^#/, '');
+    await run(async () => {
+      const snap = await getDocs(query(col('questions'), where(documentId(), '>=', prefix), where(documentId(), '<', prefix + ''), qLimit(5)));
+      const found = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (!found.length) throw new Error(`Không có câu nào mang mã #${prefix}.`);
+      setF({ ...f, byId: true, mine: false, source: '', grade: '', status: '', topic: '', text: '' });
+      setList(found);
+    });
+  }
 
   const shown = useMemo(() => {
-    const t = f.text.trim().toLowerCase();
+    const t = f.text.trim().toLowerCase().replace(/^#/, '');
     return list.filter(
       (q) =>
-        (!f.mine || !f.grade || q.grade === Number(f.grade)) &&
+        (!f.grade || q.grade === Number(f.grade)) &&
+        (!f.status || q.status === f.status) &&
         (!f.topic || q.topic === f.topic) &&
         (!f.level || q.level === f.level) &&
         (!f.type || q.type === f.type) &&
-        (!t || `${q.content} ${(q.options || []).join(' ')} ${q.authorName}`.toLowerCase().includes(t))
+        (!t || `${q.id} ${q.idCode || ''} ${q.sourceName || ''} ${q.content} ${(q.options || []).join(' ')} ${q.authorName}`.toLowerCase().includes(t))
     );
   }, [list, f]);
 
@@ -69,7 +101,7 @@ export default function QuestionBank() {
     }, 'Đã xóa câu hỏi.');
   }
 
-  const set = (k) => (e) => setF({ ...f, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
+  const set = (k) => (e) => setF({ ...f, byId: k === 'text' ? f.byId : false, [k]: e.target.type === 'checkbox' ? e.target.checked : e.target.value });
   const topics = settings.topics[f.grade] || [];
   const pageItems = shown.slice(0, page * PAGE);
 
@@ -94,8 +126,20 @@ export default function QuestionBank() {
       />
 
       <div className="card mb-4 grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-6">
-        <select className="input" value={f.grade} onChange={(e) => setF({ ...f, grade: e.target.value, topic: '' })}>
-          {f.mine && <option value="">Tất cả khối</option>}
+        <select className="input lg:col-span-2" value={f.source} onChange={(e) => {
+          const v = e.target.value;
+          setParams(v ? { nguon: v } : {}, { replace: true });
+          setF({ ...f, byId: false, source: v, mine: false, grade: v ? '' : settings.grades[settings.grades.length - 1], status: v ? '' : 'approved', topic: '' });
+        }}>
+          <option value="">Mọi nguồn đề</option>
+          {sources.map((s) => (
+            <option key={s.id} value={s.id}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+        <select className="input" value={f.grade} onChange={(e) => setF({ ...f, byId: false, grade: e.target.value, topic: '' })}>
+          {wide && <option value="">Tất cả khối</option>}
           {settings.grades.map((g) => (
             <option key={g} value={g}>
               Lớp {g}
@@ -126,7 +170,8 @@ export default function QuestionBank() {
             </option>
           ))}
         </select>
-        <select className="input" value={f.status} onChange={set('status')} disabled={f.mine}>
+        <select className="input" value={f.status} onChange={set('status')}>
+          {wide && <option value="">Mọi trạng thái</option>}
           {Object.entries(STATUS).map(([k, v]) => (
             <option key={k} value={k}>
               {v.name}
@@ -135,10 +180,14 @@ export default function QuestionBank() {
         </select>
         <div className="relative sm:col-span-2 lg:col-span-4">
           <Search size={16} className="absolute top-2.5 left-3 text-slate-400" />
-          <input className="input pl-9" placeholder="Tìm theo nội dung, tên người đóng góp…" value={f.text} onChange={set('text')} />
+          <input className="input pl-9" placeholder="Tìm theo nội dung, mã câu #…, mã ID 2D1-…, nguồn, người đóng góp…" value={f.text} onChange={set('text')} />
         </div>
         <label className="flex items-center gap-2 text-sm lg:col-span-2">
-          <input type="checkbox" checked={f.mine} onChange={(e) => setF({ ...f, mine: e.target.checked, grade: e.target.checked ? '' : settings.grades[settings.grades.length - 1] })} />
+          <input
+            type="checkbox"
+            checked={f.mine}
+            onChange={(e) => setF({ ...f, byId: false, mine: e.target.checked, source: '', grade: e.target.checked ? '' : settings.grades[settings.grades.length - 1], status: e.target.checked ? '' : 'approved' })}
+          />
           Chỉ câu hỏi của tôi (mọi trạng thái)
         </label>
       </div>
@@ -152,7 +201,15 @@ export default function QuestionBank() {
             {l.id}: {counts[l.id]}
           </span>
         ))}
-        {!f.mine && !f.topic && list.length >= LIMIT && (
+        {f.source && (
+          <button className="inline-flex items-center gap-1 rounded-full bg-blue-50 px-2 py-0.5 text-xs text-blue-800" onClick={() => {
+            setParams({}, { replace: true });
+            setF({ ...f, byId: false, source: '', grade: settings.grades[settings.grades.length - 1], status: 'approved' });
+          }}>
+            Nguồn: {sources.find((s) => s.id === f.source)?.name || f.source} <X size={12} />
+          </button>
+        )}
+        {!wide && !f.topic && list.length >= LIMIT && (
           <span className="text-xs text-amber-700">Đang hiển thị {LIMIT} câu đầu tiên – hãy chọn chuyên đề để xem đầy đủ.</span>
         )}
       </div>
@@ -161,7 +218,15 @@ export default function QuestionBank() {
         <PageLoader />
       ) : !shown.length ? (
         <Empty icon={Library} title="Chưa có câu hỏi phù hợp">
-          Thử đổi bộ lọc hoặc <Link to="/them-cau-hoi" className="text-blue-700 underline">đóng góp câu hỏi mới</Link>.
+          {/^#?[A-Za-z0-9]{6,20}$/.test(f.text.trim()) ? (
+            <button className="btn-secondary mt-2" onClick={findById} disabled={busy}>
+              <Search size={16} /> Tìm mã câu #{f.text.trim().replace(/^#/, '')} trong toàn bộ ngân hàng
+            </button>
+          ) : (
+            <>
+              Thử đổi bộ lọc hoặc <Link to="/them-cau-hoi" className="text-blue-700 underline">đóng góp câu hỏi mới</Link>.
+            </>
+          )}
         </Empty>
       ) : (
         <div className="space-y-3">
@@ -190,9 +255,24 @@ export default function QuestionBank() {
                 </div>
                 <QuestionView q={q} showAnswer={showAns} showSolution={showAns} />
                 {q.status === 'rejected' && q.reviewNote && <div className="mt-2 rounded bg-red-50 px-2 py-1 text-xs text-red-700">Góp ý: {q.reviewNote}</div>}
-                <div className="mt-2 text-xs text-slate-400">
-                  Đóng góp: {q.authorName} • {formatTimestamp(q.createdAt)}
-                  {q.reviewedByName && ` • Duyệt: ${q.reviewedByName}`}
+                <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-400">
+                  <button
+                    className="rounded bg-slate-100 px-1.5 font-mono text-slate-600 hover:bg-slate-200"
+                    title="Mã câu – bấm để sao chép"
+                    onClick={() => navigator.clipboard?.writeText(shortId(q.id))}
+                  >
+                    #{shortId(q.id)}
+                  </button>
+                  {q.sourceName && (
+                    <button className="inline-flex items-center gap-1 text-blue-700 hover:underline" onClick={() => q.sourceId && setF({ ...f, byId: false, source: q.sourceId, mine: false, grade: '', status: '', topic: '' })}>
+                      <FolderOpen size={12} /> {q.sourceName}
+                    </button>
+                  )}
+                  <span>
+                    Đóng góp: {q.authorName} • {formatTimestamp(q.createdAt)}
+                    {q.reviewedByName && ` • Duyệt: ${q.reviewedByName}`}
+                  </span>
+                  {q.usedCount > 0 && <span className="rounded bg-violet-50 px-1.5 text-violet-700">Đã dùng trong {q.usedCount} đề</span>}
                 </div>
               </div>
             );

@@ -10,6 +10,7 @@ import Dashboard from './pages/Dashboard.jsx';
 
 const QuestionBank = lazy(() => import('./pages/QuestionBank.jsx'));
 const AddQuestions = lazy(() => import('./pages/AddQuestions.jsx'));
+const Sources = lazy(() => import('./pages/Sources.jsx'));
 const Review = lazy(() => import('./pages/Review.jsx'));
 const Exams = lazy(() => import('./pages/Exams.jsx'));
 const ExamBuilder = lazy(() => import('./pages/ExamBuilder.jsx'));
@@ -35,6 +36,7 @@ function Guarded() {
           <Route index element={<Dashboard />} />
           <Route path="ngan-hang" element={<QuestionBank />} />
           <Route path="them-cau-hoi" element={<AddQuestions />} />
+          <Route path="nguon-de" element={<Sources />} />
           <Route path="sua-cau-hoi/:id" element={<AddQuestions />} />
           <Route path="duyet" element={manager(<Review />)} />
           <Route path="de-thi" element={manager(<Exams />)} />

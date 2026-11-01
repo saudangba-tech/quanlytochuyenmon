@@ -87,10 +87,29 @@ service cloud.firestore {
         || (isMember() && resource.data.createdBy == request.auth.uid && resource.data.status != 'approved');
     }
 
+    // ---------------- NGUỒN ĐỀ (mỗi file đề nhập vào là một nguồn) ----------------
+    match /sources/{sid} {
+      allow read: if isMember();
+      allow create: if isMember() && incoming().createdBy == request.auth.uid
+        && incoming().name is string && incoming().name.size() > 0 && incoming().name.size() < 300;
+      allow update, delete: if isManager() || (isMember() && resource.data.createdBy == request.auth.uid);
+    }
+
+    // ---------------- MA TRẬN MẪU (chỉ TT/TP) ----------------
+    match /matrices/{mid} {
+      allow read: if isManager();
+      allow create: if isManager() && incoming().createdBy == request.auth.uid;
+      allow update, delete: if isManager();
+    }
+
     // ---------------- ĐỀ THI ĐÃ TRỘN (chỉ TT/TP) ----------------
     match /exams/{eid} {
       allow read, update, delete: if isManager();
       allow create: if isManager() && incoming().createdBy == request.auth.uid;
+      // Bản chụp nội dung câu hỏi tại thời điểm ra đề
+      match /items/{qid} {
+        allow read, write: if isManager();
+      }
     }
 
     // Mọi đường dẫn khác: từ chối

@@ -25,3 +25,26 @@ export function useMembers({ includeAll = false } = {}) {
   const members = includeAll ? all : all.filter((u) => MEMBER_ROLES.includes(u.role));
   return { members, loading, reload: () => load(true) };
 }
+
+// Danh sách nguồn đề (sắp mới nhất trước)
+export function useSources() {
+  const [sources, setSources] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const load = useCallback(async (force = false) => {
+    if (force) invalidate('sources');
+    setLoading(true);
+    try {
+      const list = await cached('sources', () => fetchWhere('sources'));
+      list.sort((a, b) => (b.createdAt?.seconds || 0) - (a.createdAt?.seconds || 0));
+      setSources(list);
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+  useEffect(() => {
+    load();
+  }, [load]);
+  return { sources, loading, reload: () => load(true) };
+}

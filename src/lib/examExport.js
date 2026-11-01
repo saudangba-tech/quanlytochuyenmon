@@ -35,8 +35,14 @@ export function displayedOptions(q, perm) {
   return { options, correct };
 }
 
-export function tfAnswerText(q) {
-  return (q.answer || []).map((v) => (v ? 'Đ' : 'S'));
+// Câu Đúng/Sai sau khi trộn thứ tự ý a–d (perm[k] = ý gốc đứng ở vị trí k)
+export function displayedStatements(q, perm) {
+  const order = perm && perm.length === 4 ? perm : [0, 1, 2, 3];
+  return { statements: order.map((k) => q.statements?.[k] ?? ''), answer: order.map((k) => q.answer?.[k]) };
+}
+
+export function tfAnswerText(q, perm) {
+  return displayedStatements(q, perm).answer.map((v) => (v ? 'Đ' : 'S'));
 }
 
 function contentParagraphs(b, text, prefix, { indent = 0 } = {}) {
@@ -117,7 +123,7 @@ export async function buildExamDocx(exam, version, qmap, settings) {
       if (pts) b.add(para(pts, { align: 'right' }));
       b.add(imageParagraph(b, q));
       if (part.type === 'mcq') b.add(optionParagraphs(b, displayedOptions(q, it.perm).options));
-      if (part.type === 'tf') (q.statements || []).forEach((s, k) => b.add(para(run(`${'abcd'[k]}) `, { bold: true }) + mathRuns(s), { indent: 0.5 })));
+      if (part.type === 'tf') displayedStatements(q, it.perm).statements.forEach((s, k) => b.add(para(run(`${'abcd'[k]}) `, { bold: true }) + mathRuns(s), { indent: 0.5 })));
     }
   }
   b.add(para(run('------ HẾT ------', { bold: true }), { align: 'center', before: 12 }));
@@ -152,7 +158,7 @@ function keyTables(b, exam, version, qmap) {
       b.table(
         [
           ['Câu', 'Ý a)', 'Ý b)', 'Ý c)', 'Ý d)'].map((t) => ({ text: t, bold: true, align: 'center' })),
-          ...part.items.map((it) => [{ text: String(it.no), align: 'center' }, ...tfAnswerText(it.q).map((t) => ({ text: t, align: 'center' }))]),
+          ...part.items.map((it) => [{ text: String(it.no), align: 'center' }, ...tfAnswerText(it.q, it.perm).map((t) => ({ text: t, align: 'center' }))]),
         ],
         { widths: [2.2, ...Array(4).fill((w - 2.2) / 4)] }
       );
@@ -210,8 +216,8 @@ export async function buildAnswerDocx(exam, versions, qmap, settings, { solution
           b.add(para(run(`Đáp án: ${d.correct}`, { bold: true, color: 'C00000' }), { before: 2 }));
         }
         if (part.type === 'tf') {
-          const ans = tfAnswerText(q);
-          (q.statements || []).forEach((s, k) =>
+          const ans = tfAnswerText(q, it.perm);
+          displayedStatements(q, it.perm).statements.forEach((s, k) =>
             b.add(para(run(`${'abcd'[k]}) `, { bold: true }) + mathRuns(s) + run(`  → ${ans[k] === 'Đ' ? 'Đúng' : 'Sai'}`, { bold: true, color: 'C00000' }), { indent: 0.5 }))
           );
         }
@@ -223,6 +229,104 @@ export async function buildAnswerDocx(exam, versions, qmap, settings, { solution
       }
     }
   }
+  return b.toBlob();
+}
+
+// ---------- Ma trận đề & bảng đặc tả câu hỏi (tính từ mã đề gốc) ----------
+const LEVEL_IDS = ['NB', 'TH', 'VD', 'VDC'];
+const LEVEL_NAMES = { NB: 'Biết', TH: 'Hiểu', VD: 'VD', VDC: 'VDC' };
+const TYPE_TITLES = { mcq: 'TN nhiều lựa chọn', tf: 'TN Đúng/Sai', short: 'Trả lời ngắn', essay: 'Tự luận' };
+
+export function examMatrix(exam, qmap) {
+  const p = exam.points || {};
+  const pointOf = (type) => ({ mcq: p.mcq ?? 0.25, tf: 1, short: p.short ?? 0.5, essay: p.essay ?? 1 })[type] || 0;
+  const parts = versionParts(exam.versions[0], qmap);
+  const types = parts.map((x) => x.type);
+  const topics = [];
+  const cells = {};
+  for (const part of parts)
+    for (const it of part.items) {
+      const t = it.q.topic || '(Chưa phân chuyên đề)';
+      if (!topics.includes(t)) topics.push(t);
+      const k = `${t}|${part.type}|${it.q.level}`;
+      cells[k] = (cells[k] || 0) + 1;
+    }
+  const total = parts.reduce((s, x) => s + x.items.reduce((a, it) => a + pointOf(x.type), 0), 0);
+  return { parts, types, topics, cells, pointOf, total };
+}
+
+const fmt = (n) => String(Math.round(n * 100) / 100).replace('.', ',');
+
+export async function buildMatrixDocx(exam, qmap, settings) {
+  const b = new DocxBuilder({ fontSize: 11, landscape: true, margins: { top: 1.5, bottom: 1.5, left: 1.5, right: 1.5 } });
+  const { parts, types, topics, cells, pointOf, total } = examMatrix(exam, qmap);
+  headerTable(
+    b,
+    [{ text: (settings.schoolName || '').toUpperCase() }, { text: (settings.groupName || '').toUpperCase(), bold: true }],
+    [
+      { text: `MA TRẬN ${(exam.title || 'ĐỀ KIỂM TRA').toUpperCase()}`, bold: true },
+      { text: `Môn: ${settings.subject || 'Toán'} – Lớp ${exam.grade} – Năm học ${(exam.schoolYear || '').replace('-', ' – ')}`, bold: true },
+      { text: `Thời gian làm bài: ${exam.duration} phút`, italic: true },
+    ],
+    [8, b.contentWidth - 8]
+  );
+  b.add(para('', { after: 6 }));
+
+  const W = b.contentWidth;
+  const fixed = [0.9, 6.5];
+  const tail = [1.6, 1.6, 1.5];
+  const cw = (W - fixed.reduce((a, c) => a + c, 0) - tail.reduce((a, c) => a + c, 0)) / (types.length * 4);
+  const widths = [...fixed, ...Array(types.length * 4).fill(cw), ...tail];
+  const c = (text, o = {}) => ({ text: String(text), align: 'center', ...o });
+  const head1 = [c('TT', { bold: true }), c('Chủ đề / Chuyên đề', { bold: true }), ...types.map((t) => c(TYPE_TITLES[t], { bold: true, span: 4 })), c('Tổng số câu', { bold: true }), c('Tổng điểm', { bold: true }), c('Tỉ lệ %', { bold: true })];
+  const head2 = [c(''), c(''), ...types.flatMap(() => LEVEL_IDS.map((l) => c(LEVEL_NAMES[l], { bold: true }))), c(''), c(''), c('')];
+  const rows = topics.map((t, i) => {
+    let n = 0;
+    let pts = 0;
+    const vals = types.flatMap((ty) =>
+      LEVEL_IDS.map((l) => {
+        const v = cells[`${t}|${ty}|${l}`] || 0;
+        n += v;
+        pts += v * pointOf(ty);
+        return c(v || '');
+      })
+    );
+    return [c(i + 1), { text: t }, ...vals, c(n, { bold: true }), c(fmt(pts)), c(total ? `${fmt((pts / total) * 100)}%` : '')];
+  });
+  const colSum = (ty, l) => topics.reduce((s, t) => s + (cells[`${t}|${ty}|${l}`] || 0), 0);
+  const allQ = parts.reduce((s, x) => s + x.items.length, 0);
+  const sumRow = [c(''), { text: 'Tổng số câu', bold: true }, ...types.flatMap((ty) => LEVEL_IDS.map((l) => c(colSum(ty, l) || '', { bold: true }))), c(allQ, { bold: true }), c(fmt(total), { bold: true }), c('100%', { bold: true })];
+  const ptRow = [c(''), { text: 'Tổng điểm', bold: true }, ...types.flatMap((ty) => LEVEL_IDS.map((l) => c(colSum(ty, l) ? fmt(colSum(ty, l) * pointOf(ty)) : ''))), c(''), c(''), c('')];
+  const levelPts = LEVEL_IDS.map((l) => types.reduce((s, ty) => s + colSum(ty, l) * pointOf(ty), 0));
+  b.table([head1, head2, ...rows, sumRow, ptRow], { widths, header: true, fontSize: 10 });
+  b.add(
+    para(
+      run(
+        `Tỉ lệ điểm theo mức độ: ${LEVEL_IDS.map((l, i) => `${LEVEL_NAMES[l]} ${total ? fmt((levelPts[i] / total) * 100) : 0}%`).join(' – ')}. ` +
+          `Điểm mỗi câu: ${types.map((t) => `${TYPE_TITLES[t]} ${fmt(pointOf(t))}`).join('; ')}.`,
+        { italic: true, size: 10 }
+      ),
+      { before: 4 }
+    )
+  );
+
+  // Bảng đặc tả câu hỏi theo mã đề gốc
+  b.add(para(run(`BẢNG ĐẶC TẢ CÂU HỎI (theo mã đề ${exam.versions[0].code})`, { bold: true, size: 12 }), { align: 'center', before: 14, after: 4 }));
+  const spec = [['Câu', 'Chủ đề / Chuyên đề', 'Mức độ', 'Dạng câu', 'Mã ID', 'Mã câu', 'Nguồn', 'Yêu cầu cần đạt (GV bổ sung)'].map((t) => c(t, { bold: true }))];
+  for (const part of parts)
+    for (const it of part.items)
+      spec.push([
+        c(`${part.roman}.${it.no}`),
+        { text: it.q.topic || '' },
+        c(it.q.level),
+        c(TYPE_TITLES[part.type]),
+        c(it.q.idCode || ''),
+        c((it.id || '').slice(0, 8)),
+        { text: it.q.sourceName || '' },
+        { text: '' },
+      ]);
+  const sw = [1.3, 6.5, 1.5, 2.8, 2.6, 2, 4.5];
+  b.table(spec, { widths: [...sw, W - sw.reduce((a, x) => a + x, 0)], header: true, fontSize: 10 });
   return b.toBlob();
 }
 

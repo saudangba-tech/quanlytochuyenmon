@@ -183,12 +183,52 @@ Nếu bỏ bước này, khi đăng nhập Google sẽ báo lỗi `auth/unauthor
 
 | Ai | Việc | Ở đâu |
 |---|---|---|
-| Giáo viên | Soạn từng câu hoặc dán nhiều câu cùng lúc (định dạng "Câu 1: … A. … Đáp án: …") | Đóng góp câu hỏi |
+| Giáo viên | **Tải lên file Word (.docx) hoặc PDF** chứa nhiều câu, soạn từng câu, hoặc dán văn bản ("Câu 1: … A. … Đáp án: …") | Đóng góp câu hỏi |
 | Giáo viên | Khai báo dự giờ, thao giảng, HSG, KHKT, SKKN… (kèm link minh chứng Google Drive) | Hồ sơ chuyên môn |
 | TT/TP | Duyệt câu hỏi (cộng điểm tự động theo mức độ), duyệt hồ sơ | Duyệt & phê duyệt |
 | TT/TP | Ghi nhận nộp KHBD đúng hạn/muộn, kiểm tra hồ sơ cho cả tổ một lần | Hồ sơ chuyên môn → Ghi nhận nề nếp hàng loạt |
 | TT/TP | Bốc đề theo ma trận, trộn nhiều mã, tải Word (công thức Equation) / In – PDF / đáp án Excel | Trộn & xuất đề |
 | Mọi người | Xem xếp hạng tháng/học kỳ/năm; TT/TP xuất Excel và **Biên bản họp tổ (Word)** | Xếp hạng & báo cáo |
+
+### Quản lý câu hỏi theo mã và nguồn đề
+
+| Thông tin | Ý nghĩa | Dùng ở đâu |
+|---|---|---|
+| **Mã câu** `#Ab12Cd34` | Mã duy nhất của từng câu (8 ký tự), bấm vào để sao chép | Ô tìm kiếm của Ngân hàng: gõ mã → "Tìm mã câu trong toàn bộ ngân hàng" |
+| **Mã ID** `2D1-1.2-3` | Lớp 12 (2) – Giải tích (D) – chương 1 – bài 1, dạng 2 – mức 3 (VD). Ghi trong ngoặc ở đầu câu khi nhập file: "Câu 5. [2D1-1.2-3] …" | Tự điền khối, mức độ; nếu Cài đặt có dòng "2D1 \| Tên chuyên đề" thì tự xếp đúng chuyên đề |
+| **Nguồn đề** | Mỗi file nhập vào là một nguồn (tên, loại: đề thi thử/đề kiểm tra/SGK…, năm) | Trang **Nguồn đề**: xem số câu, câu đã duyệt; mở các câu của nguồn; xóa cả lô khi nhập nhầm |
+| **Chống trùng** | Khi nhập, app so nội dung với ngân hàng và trong chính file; câu trùng được tự bỏ qua (có thể "Lấy lại") | Đóng góp câu hỏi |
+| **Số lần đã dùng** | Mỗi lần câu được đưa vào một đề đã lưu, số lần dùng tăng 1 | Ngân hàng (nhãn "Đã dùng trong n đề"), Tạo đề (ưu tiên câu ít dùng) |
+
+### Trộn đề theo ma trận
+
+- **Ma trận mẫu**: lập ma trận một lần → "Lưu ma trận hiện tại làm mẫu" → lần sau chọn mẫu là có ngay (app báo ô nào ngân hàng chưa đủ câu).
+- **Phân bổ tự động**: nhập tổng số câu mỗi mức độ (vd. TN: NB 6, TH 4, VD 2) → app chia lần lượt cho các chuyên đề còn câu.
+- **Câu đã dùng ở đề trước**: *Ưu tiên câu ít dùng* (mặc định) / *Chỉ lấy câu chưa dùng* (đề mới hoàn toàn) / *Lấy ngẫu nhiên*.
+- **Trộn**: thứ tự câu trong từng phần, phương án A–D, **thứ tự ý a–d của câu Đúng/Sai**; **mã đề ngẫu nhiên** 3 chữ số.
+- **Lưu trữ đề**: khi lưu, app chụp lại nội dung từng câu vào đề → về sau có ai sửa/xóa câu trong ngân hàng thì đề đã ra vẫn xuất đúng như lúc ra đề.
+- **Xuất**: từng mã đề (Word / In – PDF), đáp án + lời giải, đáp án Excel, **Ma trận + bảng đặc tả (Word, khổ ngang)**, hoặc **trọn bộ .zip** gồm tất cả.
+
+> ⚠️ **Bản cập nhật này có thay đổi file `firestore.rules`** (thêm nguồn đề, ma trận mẫu, bản chụp đề). Hãy dán lại toàn bộ file vào Firebase → Firestore Database → Rules → **Publish** (Bước 5), nếu không các chức năng mới sẽ báo "không có quyền".
+
+### Nhập câu hỏi từ file Word / PDF
+
+Vào **Đóng góp câu hỏi → Tải file Word / PDF**, chọn khối, chuyên đề, mức độ mặc định rồi kéo thả file vào. App hiện bản xem trước từng câu: có thể sửa nội dung ở ô bên trái, chỉnh mức độ hoặc bỏ từng câu, rồi bấm **Gửi**.
+
+| Loại file | Đọc được | Lưu ý |
+|---|---|---|
+| **Word .docx** | Chữ, **công thức MathType** và **Equation** (chuyển sang LaTeX), hình PNG/JPG, đánh số tự động "Câu 1.", "A. B. C. D.", phương án trong bảng | Hình vẽ dạng WMF/EMF (hình cũ chèn từ MathType/Paint) không hiện được trên web → app cảnh báo, cần thêm lại hình |
+| **Word .doc** (97–2003) | — | Mở bằng Word → *Save As* → chọn *Word Document (.docx)* rồi tải lại |
+| **PDF** (xuất từ Word/LaTeX) | Chữ, số câu, phương án, chỉ số trên/dưới | Phân số, căn, tích phân và ký hiệu của MathType (∀, ∃, ℝ, ≥…) thường bị mất → phải sửa lại. **Nên dùng file Word gốc nếu có** |
+| **PDF scan/ảnh chụp** | — | Không có chữ để đọc |
+
+Cách app tìm **đáp án đúng** (theo thứ tự): dòng "Đáp án: B" → phương án được **gạch chân hoặc tô đỏ/tô nền** trong Word → "Chọn B" trong lời giải → bảng đáp án cuối đề ("1.A 2.C …" hoặc bảng 2 hàng Câu/Đáp án). Câu Đúng/Sai: dòng "Đáp án: Đ S Đ S" hoặc lời giải ghi "a) Đúng … b) Sai …". Câu nào thiếu đáp án sẽ được đánh dấu đỏ và không gửi.
+
+Mẹo để nhập nhanh, ít phải sửa:
+- Mỗi câu bắt đầu bằng "Câu 1:", "Câu 2." (gõ tay hoặc đánh số tự động đều được); ghi mức độ ngay sau số câu nếu muốn: "Câu 3 (VD):".
+- Bốn phương án có đủ nhãn **A. B. C. D.** (không trùng nhãn, có dấu chấm).
+- Lời giải bắt đầu bằng dòng "Lời giải" hoặc "Hướng dẫn giải".
+- Các dòng "PHẦN I…", "--- HẾT ---", "Mã đề…" được tự bỏ qua.
 
 ---
 

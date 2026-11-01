@@ -4,6 +4,7 @@ import { LEVELS, TYPES } from '../lib/constants.js';
 import { compressImage } from '../lib/image.js';
 import { Field, useToast } from './ui.jsx';
 import QuestionView from './QuestionView.jsx';
+import { parseIdCode, questionHash } from '../lib/questionId.js';
 
 const SNIPPETS = [
   ['$…$', '$x$'],
@@ -33,6 +34,9 @@ export const emptyQuestion = (base = {}) => ({
   answer: base.type === 'tf' ? [true, true, true, true] : base.type === 'mcq' || !base.type ? 'A' : '',
   solution: '',
   image: null,
+  idCode: '',
+  sourceId: base.sourceId || '',
+  sourceName: base.sourceName || '',
 });
 
 export function validateQuestion(q) {
@@ -71,15 +75,32 @@ export function cleanQuestion(q) {
     out.statements = q.statements.map((s) => s.trim());
     out.answer = q.answer.map(Boolean);
   } else if (q.type === 'short') out.answer = String(q.answer).trim();
+  out.idCode = (q.idCode || '').trim().toUpperCase();
+  out.sourceId = q.sourceId || '';
+  out.sourceName = (q.sourceName || '').trim();
+  out.hash = questionHash(out);
   return out;
 }
 
-export default function QuestionEditor({ value: q, onChange, settings }) {
+export default function QuestionEditor({ value: q, onChange, settings, sources = [] }) {
   const toast = useToast();
   const contentRef = useRef(null);
   const [focusField, setFocusField] = useState('content');
   const set = (patch) => onChange({ ...q, ...patch });
   const topics = settings.topics?.[q.grade] || [];
+  const idInfo = parseIdCode(q.idCode);
+
+  // Nhập mã ID hợp lệ → tự điền khối, mức độ, chuyên đề (nếu Cài đặt có mã chuyên đề)
+  function changeId(value) {
+    const info = parseIdCode(value);
+    const patch = { idCode: value };
+    if (info) {
+      if (settings.grades.includes(info.grade)) patch.grade = info.grade;
+      patch.level = info.level;
+      if (settings.topicCodes?.[info.chapter]) patch.topic = settings.topicCodes[info.chapter];
+    }
+    set(patch);
+  }
 
   function changeType(type) {
     let answer = q.answer;
@@ -161,6 +182,35 @@ export default function QuestionEditor({ value: q, onChange, settings }) {
             ))}
           </datalist>
         </Field>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <Field
+            label="Mã ID (không bắt buộc)"
+            hint={
+              idInfo
+                ? `Lớp ${idInfo.grade} • chuyên đề ${idInfo.chapter} • bài ${idInfo.lesson}${idInfo.form ? `, dạng ${idInfo.form}` : ''} • ${idInfo.level}`
+                : 'Ví dụ 2D1-1.2-3: lớp 12, chương 1, bài 1 dạng 2, mức 3 (VD)'
+            }
+          >
+            <input className="input font-mono uppercase" value={q.idCode || ''} onChange={(e) => changeId(e.target.value)} placeholder="2D1-1.2-3" />
+          </Field>
+          <Field label="Nguồn câu hỏi" hint="Đề thi thử, đề kiểm tra, sách… Gõ tên mới để tạo nguồn mới.">
+            <input
+              className="input"
+              list="source-list"
+              value={q.sourceName || ''}
+              onChange={(e) => {
+                const s = sources.find((x) => x.name === e.target.value);
+                set({ sourceName: e.target.value, sourceId: s?.id || '' });
+              }}
+              placeholder="Ví dụ: Đề thi thử TN 2025 – Sở GD Hà Nội"
+            />
+            <datalist id="source-list">
+              {sources.map((s) => (
+                <option key={s.id} value={s.name} />
+              ))}
+            </datalist>
+          </Field>
+        </div>
 
         <div>
           <span className="label">Nội dung câu hỏi</span>

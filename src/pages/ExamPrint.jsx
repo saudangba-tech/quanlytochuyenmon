@@ -3,8 +3,8 @@ import { Link, useParams, useSearchParams } from 'react-router-dom';
 import { getDoc } from 'firebase/firestore';
 import { ArrowLeft, Printer } from 'lucide-react';
 import { useAuth } from '../context/AuthContext.jsx';
-import { fetchByIds, ref } from '../lib/db.js';
-import { versionParts, displayedOptions, tfAnswerText, PART_TITLES, LETTERS } from '../lib/examExport.js';
+import { loadExamQuestions, ref } from '../lib/db.js';
+import { versionParts, displayedOptions, tfAnswerText, displayedStatements, PART_TITLES, LETTERS } from '../lib/examExport.js';
 import { MathText } from '../lib/math.jsx';
 import { plainLength } from '../lib/utils.js';
 import { PageLoader } from '../components/ui.jsx';
@@ -25,7 +25,7 @@ export default function ExamPrint() {
       if (!s.exists()) return setErr('Không tìm thấy đề.');
       const e = { id: s.id, ...s.data() };
       setExam(e);
-      setQmap(await fetchByIds('questions', e.questionIds));
+      setQmap(await loadExamQuestions(e));
     })().catch((e) => setErr(e.message));
   }, [id]);
 
@@ -109,10 +109,10 @@ export default function ExamPrint() {
                     </div>
                   )}
                   {part.type === 'tf' &&
-                    (q.statements || []).map((s, k) => (
+                    displayedStatements(q, it.perm).statements.map((s, k) => (
                       <div key={k} className="flex gap-1 pl-4">
                         <b>{'abcd'[k]})</b> <MathText text={s} as="span" className="flex-1" />
-                        {withAnswers && <b className="text-red-700">{tfAnswerText(q)[k] === 'Đ' ? 'Đúng' : 'Sai'}</b>}
+                        {withAnswers && <b className="text-red-700">{tfAnswerText(q, it.perm)[k] === 'Đ' ? 'Đúng' : 'Sai'}</b>}
                       </div>
                     ))}
                   {withAnswers && part.type === 'short' && <div className="pl-4 font-semibold text-red-700">Đáp án: {q.answer}</div>}
